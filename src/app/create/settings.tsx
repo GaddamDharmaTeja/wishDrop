@@ -1,5 +1,6 @@
+import DateTimePicker from '@react-native-community/datetimepicker';
 import { router } from 'expo-router';
-import { useState } from 'react';
+import { createElement, useMemo, useState } from 'react';
 import { Alert, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -10,12 +11,27 @@ import { api } from '@/lib/api';
 import { openWhatsAppText, revealInviteText, sharePlainText } from '@/lib/share-text';
 import { useCreateDraft } from '@/providers/create-draft-provider';
 
+function defaultLaterDate() {
+  return new Date(Date.now() + 3600000);
+}
+
+function toLocalInputValue(date: Date) {
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
 export default function SurpriseSettings() {
   const insets = useSafeAreaInsets();
   const { draft, setDraft, reset } = useCreateDraft();
   const [busy, setBusy] = useState(false);
   const [shareUrl, setShareUrl] = useState<string | null>(null);
   const [surpriseId, setSurpriseId] = useState<string | null>(null);
+  const [showPicker, setShowPicker] = useState(false);
+
+  const scheduledAt = useMemo(
+    () => (draft.opensAt ? new Date(draft.opensAt) : defaultLaterDate()),
+    [draft.opensAt],
+  );
 
   const publish = async () => {
     try {
@@ -23,8 +39,14 @@ export default function SurpriseSettings() {
       const now = new Date();
       const opensAt =
         draft.scheduleMode === 'later'
-          ? new Date(now.getTime() + 3600000)
+          ? draft.opensAt
+            ? new Date(draft.opensAt)
+            : defaultLaterDate()
           : now;
+      if (draft.scheduleMode === 'later' && opensAt.getTime() <= now.getTime()) {
+        Alert.alert('Pick a future time', 'The reveal time must be later than now.');
+        return;
+      }
       const expiresAt = new Date(opensAt.getTime() + draft.hours * 3600000);
 
       const created = await api.createSurprise({
@@ -37,6 +59,7 @@ export default function SurpriseSettings() {
         visibility: draft.visibility,
         anonymous: draft.anonymous,
         allowWishes: draft.allowWishes,
+        keepSurprise: draft.keepSurprise,
         animation: draft.animation,
         personId: draft.personId ?? undefined,
       });
@@ -131,6 +154,11 @@ export default function SurpriseSettings() {
           onChange={value => setDraft({ allowWishes: value })}
         />
         <ToggleRow
+          title="Keep it a surprise until reveal"
+          value={draft.keepSurprise}
+          onChange={value => setDraft({ keepSurprise: value })}
+        />
+        <ToggleRow
           title="PIN protection (optional)"
           value={draft.pinEnabled}
           onChange={value => setDraft({ pinEnabled: value })}
@@ -151,7 +179,12 @@ export default function SurpriseSettings() {
           {(['now', 'later'] as const).map(mode => (
             <Pressable
               key={mode}
-              onPress={() => setDraft({ scheduleMode: mode })}
+              onPress={() => {
+                setDraft({
+                  scheduleMode: mode,
+                  opensAt: mode === 'later' ? (draft.opensAt ?? defaultLaterDate().toISOString()) : null,
+                });
+              }}
               style={[styles.segmentItem, draft.scheduleMode === mode && styles.segmentOn]}
             >
               <Text style={[styles.segmentText, draft.scheduleMode === mode && styles.segmentTextOn]}>
@@ -161,7 +194,59 @@ export default function SurpriseSettings() {
           ))}
         </View>
         {draft.scheduleMode === 'later' ? (
-          <Text style={styles.hint}>Opens 1 hour from now (custom picker coming next).</Text>
+          Platform.OS === 'web' ? (
+            <View style={styles.dateBtn}>
+              <Ionicons name="calendar-outline" size={18} color={colors.pink} />
+              {createElement('input', {
+                type: 'datetime-local',
+                value: toLocalInputValue(scheduledAt),
+                min: toLocalInputValue(new Date()),
+                onChange: (event: { target: { value: string } }) => {
+                  const next = event.target.value ? new Date(event.target.value) : null;
+                  if (next && !Number.isNaN(next.getTime())) {
+                    setDraft({ opensAt: next.toISOString() });
+                  }
+                },
+                style: {
+                  flex: 1,
+                  border: 'none',
+                  outline: 'none',
+                  background: 'transparent',
+                  color: colors.ink,
+                  fontWeight: '700',
+                  fontSize: 14,
+                  fontFamily: 'inherit',
+                },
+              })}
+            </View>
+          ) : (
+            <>
+              <Pressable style={styles.dateBtn} onPress={() => setShowPicker(true)}>
+                <Ionicons name="calendar-outline" size={18} color={colors.pink} />
+                <Text style={styles.dateText}>
+                  {scheduledAt.toLocaleString(undefined, {
+                    weekday: 'short',
+                    month: 'short',
+                    day: 'numeric',
+                    hour: 'numeric',
+                    minute: '2-digit',
+                  })}
+                </Text>
+              </Pressable>
+              {showPicker ? (
+                <DateTimePicker
+                  value={scheduledAt}
+                  mode="datetime"
+                  display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                  minimumDate={new Date()}
+                  onChange={(_, date) => {
+                    setShowPicker(Platform.OS === 'ios');
+                    if (date) setDraft({ opensAt: date.toISOString() });
+                  }}
+                />
+              ) : null}
+            </>
+          )
         ) : null}
 
         {draft.personId ? (
@@ -294,6 +379,19 @@ const styles = StyleSheet.create({
   segmentOn: { backgroundColor: '#FFE6F3' },
   segmentText: { color: colors.muted, fontWeight: '700', fontSize: 13 },
   segmentTextOn: { color: colors.pink },
+  dateBtn: {
+    marginTop: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: colors.white,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: colors.line,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+  },
+  dateText: { color: colors.ink, fontWeight: '700' },
   hint: { color: colors.muted, fontSize: 12, marginTop: 8 },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   modalBackdrop: {

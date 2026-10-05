@@ -14,6 +14,7 @@ export type CreateDraft = {
   visibility: Visibility;
   anonymous: boolean;
   allowWishes: boolean;
+  keepSurprise: boolean;
   pinEnabled: boolean;
   pin: string;
   scheduleMode: 'now' | 'later';
@@ -33,6 +34,7 @@ const defaults: CreateDraft = {
   visibility: 'link',
   anonymous: false,
   allowWishes: true,
+  keepSurprise: true,
   pinEnabled: false,
   pin: '',
   scheduleMode: 'now',

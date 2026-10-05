@@ -10,7 +10,12 @@ export function contributeUnavailablePage() {
   );
 }
 
-export function contributePage(surprise: { recipientName: string; occasion: string; pageUrl: string }) {
+export function contributePage(surprise: {
+  recipientName: string;
+  occasion: string;
+  pageUrl: string;
+  passwordRequired?: boolean;
+}) {
   const script = `
     document.getElementById('wish-form').addEventListener('submit', async e => {
       e.preventDefault();
@@ -19,12 +24,14 @@ export function contributePage(surprise: { recipientName: string; occasion: stri
       status.textContent = '';
       button.disabled = true;
       const token = location.pathname.split('/').pop();
+      const passwordEl = document.getElementById('password');
       const response = await fetch('/v1/public/contribute/' + token, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           authorName: document.getElementById('name').value,
-          message: document.getElementById('message').value
+          message: document.getElementById('message').value,
+          password: passwordEl ? passwordEl.value : undefined
         })
       });
       button.disabled = false;
@@ -39,6 +46,9 @@ export function contributePage(surprise: { recipientName: string; occasion: stri
 
   const name = escape(surprise.recipientName);
   const pageUrl = escape(surprise.pageUrl);
+  const passwordField = surprise.passwordRequired
+    ? `<input id="password" type="password" maxlength="64" placeholder="Contribution password" required />`
+    : '';
   return htmlPage(
     `Add your wish for ${name} · WishDrop`,
     `<div class="gift">💌</div>
@@ -46,6 +56,7 @@ export function contributePage(surprise: { recipientName: string; occasion: stri
      <h1>Add your wish for ${name}</h1>
      <p class="muted">Your message will appear when ${name} opens the surprise.</p>
      <form id="wish-form" class="card">
+       ${passwordField}
        <input id="name" maxlength="60" placeholder="Your name" required />
        <textarea id="message" maxlength="500" placeholder="Write something from the heart..." required></textarea>
        <button type="submit">Send my wish</button>

@@ -1,3 +1,9 @@
+import {
+  RecordingPresets,
+  requestRecordingPermissionsAsync,
+  setAudioModeAsync,
+  useAudioRecorder,
+} from 'expo-audio';
 import * as ImagePicker from 'expo-image-picker';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router, useLocalSearchParams } from 'expo-router';
@@ -17,6 +23,7 @@ import { usePeople } from '@/providers/people-provider';
 const mediaKinds = [
   { id: 'text', label: 'Text', icon: 'text-outline' as const },
   { id: 'photo', label: 'Photo', icon: 'image-outline' as const },
+  { id: 'video', label: 'Video', icon: 'videocam-outline' as const },
   { id: 'voice', label: 'Voice', icon: 'mic-outline' as const },
   { id: 'music', label: 'Music', icon: 'musical-notes-outline' as const },
 ];
@@ -27,6 +34,7 @@ export default function ComposeSurprise() {
   const { draft, setDraft } = useCreateDraft();
   const { getPerson } = usePeople();
   const person = getPerson(draft.personId ?? undefined);
+  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
 
   useEffect(() => {
     if (params.occasion && params.occasion !== draft.occasion) {
@@ -36,22 +44,19 @@ export default function ComposeSurprise() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params.occasion]);
 
-  const pickMedia = async () => {
+  const pickMedia = async (videos: boolean) => {
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      allowsMultipleSelection: true,
+      mediaTypes: videos ? ['videos'] : ['images'],
+      allowsMultipleSelection: !videos,
       quality: 0.8,
     });
     if (result.canceled) return;
 
     const uploaded: MediaItem[] = [];
     for (const asset of result.assets) {
-      if (asset.type === 'video') {
-        Alert.alert('Videos are not saved', 'Add a photo instead. Videos are not stored.');
-        continue;
-      }
       try {
-        const { media } = await api.uploadMedia(asset.uri, 'image', asset.fileName ?? 'Photo');
+        const kind = asset.type === 'video' ? 'video' : 'image';
+        const { media } = await api.uploadMedia(asset.uri, kind, asset.fileName ?? kind);
         uploaded.push(media);
       } catch (error) {
         Alert.alert(
@@ -67,15 +72,54 @@ export default function ComposeSurprise() {
     setDraft({ media: [...draft.media, ...uploaded] });
   };
 
+  const recordVoice = async () => {
+    try {
+      const permission = await requestRecordingPermissionsAsync();
+      if (!permission.granted) {
+        Alert.alert('Microphone needed', 'Allow microphone access to attach a voice note.');
+        return;
+      }
+      await setAudioModeAsync({ playsInSilentMode: true, allowsRecording: true });
+      await recorder.prepareToRecordAsync();
+      recorder.record();
+      Alert.alert('Recording', 'Tap OK when finished to attach your voice note.', [
+        {
+          text: 'Cancel',
+          style: 'cancel',
+          onPress: async () => {
+            try {
+              await recorder.stop();
+            } catch {
+              /* ignore */
+            }
+          },
+        },
+        {
+          text: 'Attach',
+          onPress: async () => {
+            try {
+              await recorder.stop();
+              const uri = recorder.uri;
+              if (!uri) return;
+              const { media } = await api.uploadMedia(uri, 'audio', 'Voice note');
+              setDraft({ media: [...draft.media, media] });
+            } catch (error) {
+              Alert.alert('Could not save voice', error instanceof Error ? error.message : 'Try again.');
+            }
+          },
+        },
+      ]);
+    } catch {
+      Alert.alert('Microphone needed', 'Allow microphone access to attach a voice note.');
+    }
+  };
+
   const onMediaPress = (id: string) => {
-    if (id === 'photo') return pickMedia();
+    if (id === 'photo') return pickMedia(false);
+    if (id === 'video') return pickMedia(true);
+    if (id === 'voice') return recordVoice();
     if (id === 'text') return;
-    Alert.alert(
-      'Coming with media services',
-      id === 'voice'
-        ? 'Voice notes unlock after audio upload (R2) is configured.'
-        : 'Licensed music unlocks after your media provider is configured.',
-    );
+    Alert.alert('Coming soon', 'Licensed music unlocks after your media provider is configured.');
   };
 
   const next = () => {

@@ -4,14 +4,23 @@ import { File, UploadType } from 'expo-file-system';
 import * as SecureStore from 'expo-secure-store';
 import { Platform } from 'react-native';
 import {
+  ContributeInfo,
   CreateSurprisePayload,
+  InviteSettings,
+  InviteSettingsPayload,
   MediaItem,
+  MediaKind,
   Person,
   PersonPayload,
   PublishPayload,
+  ReportReason,
   Surprise,
+  SurpriseAnalytics,
   User,
+  VideoReel,
+  VideoStyle,
   Wish,
+  WishStyle,
 } from './types';
 
 const apiUrl = Constants.expoConfig?.extra?.apiUrl || process.env.EXPO_PUBLIC_API_URL || 'http://localhost:3001/v1';
@@ -157,20 +166,52 @@ export const api = {
   publish: (id: string, payload: PublishPayload) =>
     request<{ surprise: Surprise }>(`/surprises/${id}/publish`, { method: 'POST', body: JSON.stringify(payload) }),
   share: (id: string) => request<{ url: string }>(`/surprises/${id}/share`, { method: 'POST' }),
-  invite: (id: string) => request<{ url: string }>(`/surprises/${id}/invite`, { method: 'POST' }),
+  invite: (id: string) => request<{ url: string; invite: InviteSettings }>(`/surprises/${id}/invite`, { method: 'POST' }),
+  updateInviteSettings: (id: string, payload: InviteSettingsPayload) =>
+    request<{ invite: InviteSettings }>(`/surprises/${id}/invite-settings`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+  regenerateInvite: (id: string) =>
+    request<{ url: string; invite: InviteSettings }>(`/surprises/${id}/invite/regenerate`, { method: 'POST' }),
+  disableInvite: (id: string) =>
+    request<{ invite: InviteSettings }>(`/surprises/${id}/invite/disable`, { method: 'POST' }),
   wishes: (id: string) => request<{ wishes: Wish[] }>(`/surprises/${id}/wishes`),
+  deleteWish: (id: string, wishId: string) =>
+    request<{ ok: boolean; wish: Wish }>(`/surprises/${id}/wishes/${wishId}`, { method: 'DELETE' }),
+  reportWish: (id: string, wishId: string, reason: ReportReason, details?: string) =>
+    request<{ ok: boolean; wish: Wish }>(`/surprises/${id}/wishes/${wishId}/report`, {
+      method: 'POST',
+      body: JSON.stringify({ reason, details }),
+    }),
+  analytics: (id: string) => request<SurpriseAnalytics>(`/surprises/${id}/analytics`),
+  generateVideo: (
+    id: string,
+    payload: { style: VideoStyle; includeMusic: boolean; includeNames: boolean; durationSec: number },
+  ) =>
+    request<{ videoReel: VideoReel; surprise: Surprise }>(`/surprises/${id}/video`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
   people: () => request<{ people: Person[] }>('/people'),
   createPerson: (payload: PersonPayload) =>
     request<{ person: Person }>('/people', { method: 'POST', body: JSON.stringify(payload) }),
   updatePerson: (id: string, payload: Partial<PersonPayload>) =>
     request<{ person: Person }>(`/people/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
   deletePerson: (id: string) => request<{ ok: boolean }>(`/people/${id}`, { method: 'DELETE' }),
-  contributeInfo: (token: string) =>
-    request<{ recipientName: string; occasion: string; title: string }>(`/public/contribute/${token}`),
-  contribute: (token: string, authorName: string, message: string) =>
+  contributeInfo: (token: string) => request<ContributeInfo>(`/public/contribute/${token}`),
+  contributeAi: (token: string, style: WishStyle) =>
+    request<{ suggestion: string; style: WishStyle; styles: WishStyle[] }>(`/public/contribute/${token}/ai`, {
+      method: 'POST',
+      body: JSON.stringify({ style }),
+    }),
+  contribute: (
+    token: string,
+    payload: { authorName: string; message: string; media?: MediaItem[]; password?: string },
+  ) =>
     request<{ wish: Wish }>(`/public/contribute/${token}`, {
       method: 'POST',
-      body: JSON.stringify({ authorName, message }),
+      body: JSON.stringify(payload),
     }),
   publicSurprise: (token: string, pin?: string) =>
     request<{ surprise: Surprise }>(`/public/surprises/${token}`, {
@@ -188,13 +229,18 @@ export const api = {
     }>('/uploads/presign', { method: 'POST', body: JSON.stringify(payload) }),
   uploadMedia: async (
     localUri: string,
-    kind: 'image' | 'audio',
+    kind: Extract<MediaKind, 'image' | 'audio' | 'video'>,
     name: string,
+    options?: { contributeToken?: string },
   ): Promise<{ media: MediaItem }> => {
     await hydrateTokens();
-    const mime = kind === 'audio' ? 'audio/mp4' : 'image/jpeg';
-    const filename = kind === 'audio' ? 'voice.m4a' : 'photo.jpg';
-    const headers = accessToken ? { Authorization: `Bearer ${accessToken}` } : {};
+    const mime = kind === 'audio' ? 'audio/mp4' : kind === 'video' ? 'video/mp4' : 'image/jpeg';
+    const filename = kind === 'audio' ? 'voice.m4a' : kind === 'video' ? 'clip.mp4' : 'photo.jpg';
+    const headers: Record<string, string> =
+      accessToken && !options?.contributeToken ? { Authorization: `Bearer ${accessToken}` } : {};
+    const path = options?.contributeToken
+      ? `/public/contribute/${options.contributeToken}/upload`
+      : '/uploads/file';
 
     let status = 0;
     let body: { message?: string; media?: MediaItem } = {};
@@ -203,11 +249,11 @@ export const api = {
         const form = new FormData();
         const blob = await (await fetch(localUri)).blob();
         form.append('file', blob, filename);
-        const response = await fetch(`${apiUrl}/uploads/file`, { method: 'POST', headers, body: form });
+        const response = await fetch(`${apiUrl}${path}`, { method: 'POST', headers, body: form });
         status = response.status;
         body = await response.json().catch(() => ({}));
       } else {
-        const result = await new File(localUri).upload(`${apiUrl}/uploads/file`, {
+        const result = await new File(localUri).upload(`${apiUrl}${path}`, {
           uploadType: UploadType.MULTIPART,
           fieldName: 'file',
           mimeType: mime,
@@ -222,15 +268,15 @@ export const api = {
       throw new Error(`Could not upload media to ${apiUrl}. ${reason}`);
     }
 
-    if (status === 401) {
+    if (status === 401 && !options?.contributeToken) {
       const refreshed = await refreshSession();
-      if (refreshed) return api.uploadMedia(localUri, kind, name);
+      if (refreshed) return api.uploadMedia(localUri, kind, name, options);
     }
 
     if (status < 200 || status >= 300 || !body.media) {
       throw new Error(body.message ?? `Upload failed (${status})`);
     }
-    return { media: body.media };
+    return { media: { ...body.media, name: name || body.media.name } };
   },
   registerPushToken: (token: string) =>
     request<{ ok: boolean; enabled: boolean }>('/devices/push', {

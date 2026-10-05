@@ -3,6 +3,7 @@ import { useCallback, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Linking,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -12,18 +13,27 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import * as Clipboard from 'expo-clipboard';
-import { BottomNav, Brand, colors, timeLeft } from '@/components/wishdrop-ui';
+import { BottomNav, Brand, Chip, colors, timeLeft } from '@/components/wishdrop-ui';
 import { OCCASIONS } from '@/constants/occasions';
 import { api } from '@/lib/api';
 import { Surprise } from '@/lib/types';
 import { useAuth } from '@/providers/auth-provider';
+
+type MemoryTab = 'all' | 'birthdays' | 'anniversaries' | 'other';
+
+function tabForOccasion(occasion: string): Exclude<MemoryTab, 'all'> {
+  const value = occasion.toLowerCase();
+  if (value.includes('birthday')) return 'birthdays';
+  if (value.includes('anniversary')) return 'anniversaries';
+  return 'other';
+}
 
 export default function Memories() {
   const insets = useSafeAreaInsets();
   const { user, status } = useAuth();
   const [items, setItems] = useState<Surprise[]>([]);
   const [query, setQuery] = useState('');
+  const [tab, setTab] = useState<MemoryTab>('all');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -55,19 +65,25 @@ export default function Memories() {
   }
   if (!user) return <Redirect href="/welcome" />;
 
-  const shown = items.filter(
-    item =>
+  const shown = items.filter(item => {
+    const matchesQuery =
       item.title.toLowerCase().includes(query.toLowerCase()) ||
-      item.recipientName.toLowerCase().includes(query.toLowerCase()),
-  );
+      item.recipientName.toLowerCase().includes(query.toLowerCase());
+    const matchesTab = tab === 'all' || tabForOccasion(item.occasion) === tab;
+    return matchesQuery && matchesTab;
+  });
 
-  const copyRevealLink = async (item: Surprise) => {
+  const openRevealLink = async (item: Surprise) => {
     try {
       const url = item.shareUrl ?? (await api.share(item.id)).url;
-      await Clipboard.setStringAsync(url);
-      Alert.alert('Copied reveal link', url);
+      const supported = await Linking.canOpenURL(url);
+      if (!supported) {
+        Alert.alert('Cannot open link', url);
+        return;
+      }
+      await Linking.openURL(url);
     } catch (err) {
-      Alert.alert('Could not copy link', err instanceof Error ? err.message : 'Publish this surprise first.');
+      Alert.alert('Could not open link', err instanceof Error ? err.message : 'Publish this surprise first.');
     }
   };
 
@@ -82,6 +98,18 @@ export default function Memories() {
         </View>
         <Text style={styles.title}>Your memories</Text>
         <Text style={styles.copy}>Surprises become private memories once their public reveal ends.</Text>
+        <View style={styles.tabs}>
+          {(
+            [
+              ['all', 'All'],
+              ['birthdays', 'Birthdays'],
+              ['anniversaries', 'Anniversaries'],
+              ['other', 'Other'],
+            ] as const
+          ).map(([id, label]) => (
+            <Chip key={id} label={label} selected={tab === id} onPress={() => setTab(id)} />
+          ))}
+        </View>
         <View style={styles.search}>
           <Ionicons name="search" size={18} color={colors.muted} />
           <TextInput
@@ -118,12 +146,26 @@ export default function Memories() {
                 <Text style={styles.message} numberOfLines={2}>
                   {item.message}
                 </Text>
+                <View style={styles.cardActions}>
+                  {item.allowWishes !== false ? (
+                    <Pressable
+                      onPress={() =>
+                        router.push({
+                          pathname: '/create/invite',
+                          params: { id: item.id, name: item.recipientName },
+                        } as Href)
+                      }
+                    >
+                      <Text style={styles.cardLink}>Manage</Text>
+                    </Pressable>
+                  ) : null}
+                  {item.status === 'live' || item.status === 'scheduled' ? (
+                    <Pressable onPress={() => openRevealLink(item)} hitSlop={8} accessibilityLabel="Open reveal link">
+                      <Ionicons name="open-outline" size={20} color={colors.pink} />
+                    </Pressable>
+                  ) : null}
+                </View>
               </View>
-              {item.status === 'live' || item.status === 'scheduled' ? (
-                <Pressable onPress={() => copyRevealLink(item)} hitSlop={8} accessibilityLabel="Copy reveal link">
-                  <Ionicons name="copy-outline" size={20} color={colors.pink} />
-                </Pressable>
-              ) : null}
             </View>
           ))
         ) : (
@@ -146,6 +188,7 @@ const styles = StyleSheet.create({
   },
   title: { color: colors.ink, fontWeight: '900', fontSize: 28, marginTop: 20 },
   copy: { color: colors.muted, marginVertical: 8, lineHeight: 20 },
+  tabs: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 4 },
   search: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -179,6 +222,8 @@ const styles = StyleSheet.create({
   cardTitle: { color: colors.ink, fontWeight: '800', fontSize: 16 },
   meta: { color: colors.pink, fontSize: 12, marginTop: 4, textTransform: 'capitalize' },
   message: { color: colors.muted, marginTop: 8, lineHeight: 18 },
+  cardActions: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 10 },
+  cardLink: { color: colors.pink, fontWeight: '800', fontSize: 13 },
   empty: { color: colors.muted, textAlign: 'center', marginTop: 30 },
   errorBox: {
     backgroundColor: '#FFF0F4',

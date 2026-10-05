@@ -1,7 +1,7 @@
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useLocalSearchParams } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { router, useLocalSearchParams } from 'expo-router';
+import { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -19,7 +19,7 @@ import { GradientButton, colors, gradients } from '@/components/wishdrop-ui';
 import { api } from '@/lib/api';
 import { MediaItem, Surprise, Wish } from '@/lib/types';
 
-type Phase = 'intro' | 'unwrapping' | 'pin' | 'reveal';
+type Phase = 'intro' | 'unwrapping' | 'pin' | 'summary' | 'reveal';
 
 function MediaBlock({ item }: { item: MediaItem }) {
   if (item.kind === 'image' && /^https?:\/\//i.test(item.uri)) {
@@ -81,12 +81,29 @@ export default function PublicSurprise() {
     return () => clearTimeout(timer);
   }, [phase]);
 
+  const stats = useMemo(() => {
+    const wishes = item?.wishes ?? [];
+    const fromApi = item?.stats;
+    if (fromApi) return fromApi;
+    let photos = 0;
+    let videos = 0;
+    let voice = 0;
+    for (const wish of wishes) {
+      for (const media of wish.media ?? []) {
+        if (media.kind === 'image') photos += 1;
+        else if (media.kind === 'video') videos += 1;
+        else if (media.kind === 'audio') voice += 1;
+      }
+    }
+    return { wishes: wishes.length, photos, videos, voice, music: 0 };
+  }, [item]);
+
   const reveal = async () => {
     try {
       setLoading(true);
       const { surprise } = await api.publicSurprise(token, pin || undefined);
       setItem(surprise);
-      setPhase('reveal');
+      setPhase('summary');
     } catch (error) {
       Alert.alert('Not ready yet', error instanceof Error ? error.message : 'This surprise is unavailable.');
     } finally {
@@ -153,6 +170,31 @@ export default function PublicSurprise() {
 
   if (!item) return null;
 
+  if (phase === 'summary') {
+    const parts = [
+      `${stats.wishes} ${stats.wishes === 1 ? 'wish' : 'wishes'}`,
+      stats.photos ? `${stats.photos} photos` : null,
+      stats.videos ? `${stats.videos} videos` : null,
+      stats.voice ? `${stats.voice} voice notes` : null,
+    ].filter(Boolean);
+    return (
+      <LinearGradient colors={['#24164A', '#F21C92']} style={[styles.fill, { paddingTop: insets.top }]}>
+        <View style={styles.center}>
+          <Text style={styles.big}>🎁</Text>
+          <Text style={styles.introTitle}>Happy {item.occasion}, {item.recipientName.split(' ')[0]}!</Text>
+          <Text style={styles.introCopy}>{parts.join(', ') || 'A surprise packed with love'} waiting for you.</Text>
+          <GradientButton onPress={() => setPhase('reveal')}>View my surprise</GradientButton>
+          <Pressable
+            style={{ marginTop: 16 }}
+            onPress={() => router.push({ pathname: '/surprise/wall', params: { token } })}
+          >
+            <Text style={{ color: '#FFADD8', fontWeight: '800' }}>Open Memory Wall</Text>
+          </Pressable>
+        </View>
+      </LinearGradient>
+    );
+  }
+
   return (
     <LinearGradient colors={[...gradients.brand]} style={[styles.fill, { paddingTop: insets.top }]}>
       <ScrollView contentContainerStyle={[styles.reveal, { paddingBottom: insets.bottom + 40 }]}>
@@ -167,6 +209,12 @@ export default function PublicSurprise() {
         </View>
         <Text style={styles.message}>{item.message}</Text>
         <WishesStrip wishes={item.wishes ?? []} />
+
+        <View style={{ alignSelf: 'stretch', marginTop: 20 }}>
+          <GradientButton onPress={() => router.push({ pathname: '/surprise/wall', params: { token } })}>
+            Open Memory Wall
+          </GradientButton>
+        </View>
 
         <Text style={styles.reaction}>Send some love</Text>
         <View style={styles.reactions}>
